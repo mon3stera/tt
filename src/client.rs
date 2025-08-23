@@ -1,3 +1,4 @@
+use std::fmt::{Display, Formatter};
 use std::path::Path;
 use clap::Subcommand;
 use reqwest::Body;
@@ -32,11 +33,10 @@ pub async fn upload(src: &str, port: u16) -> anyhow::Result<()> {
     let path = Path::new(src);
     let name = path.file_name().unwrap().to_str().unwrap();
 
-    let mut buf = BytesMut::new();
+    let mut buf = Vec::new();
     let mut file = File::open(src).await?;
-    file.read_buf(&mut buf).await?;
+    file.read_to_end(&mut buf).await?;
 
-    let buf = buf.to_vec();
     let res = reqwest::Client::new()
         .post(format!("http://127.0.0.1:{port}/upload/{name}"))
         .body(Body::from(buf))
@@ -51,7 +51,13 @@ pub struct ExecRes {
     success: String,
     stdout: String,
     stderr: String,
-    error: String,
+    error: Option<String>,
+}
+
+impl Display for ExecRes {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "{}", serde_json::to_string_pretty(self).unwrap())
+    }
 }
 
 pub async fn exec(command: &str, port: u16) -> anyhow::Result<ExecRes> {

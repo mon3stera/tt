@@ -72,7 +72,7 @@ pub fn handle_binary_command(sub: &BinarySub) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn read(addr: &str) -> anyhow::Result<()> {
+pub fn read(addr: &str) -> anyhow::Result<()> {
     let offset_str = addr.strip_prefix("0x").expect("A hex number must start with `0x`");
     let offset = u64::from_str_radix(offset_str.trim(), 16).expect("Failed to parse hex number");
 
@@ -102,3 +102,4 @@ fn read(addr: &str) -> anyhow::Result<()> {
     println!("The value of `{addr}`: {}", slice[0]);
     Ok(())
 }
+

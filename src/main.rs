@@ -3,11 +3,14 @@ mod script;
 mod test;
 mod binary;
 mod client;
+mod qemu;
 
 use clap::{Parser, Subcommand};
+use log::LevelFilter;
 use crate::binary::{handle_binary_command, BinarySub};
 use crate::client::{handle_client_command, ClientSub};
 use crate::module::{handle_module_command, ModuleSub};
+use crate::qemu::{handle_qemu_command, QemuSub};
 use crate::script::{handle_script_command, ScriptSub};
 use crate::test::{handle_test_command, TestSub};
 
@@ -47,6 +50,13 @@ enum Subcommands {
         #[clap(default_value_t = 8088)]
         port: u16,
     },
+    Init {
+
+    },
+    Qemu {
+        #[clap(subcommand)]
+        sub: QemuSub,
+    },
 }
 
 async fn handle_command(sub: &Subcommands) -> anyhow::Result<()> {
@@ -56,11 +66,18 @@ async fn handle_command(sub: &Subcommands) -> anyhow::Result<()> {
         Subcommands::Script { sub } => handle_script_command(sub),
         Subcommands::Binary { sub } => handle_binary_command(sub),
         Subcommands::Client { sub, port } => handle_client_command(sub, *port).await,
+        Subcommands::Init { .. } => {
+            handle_script_command(&ScriptSub::Exec { name: "start-another-shell".to_string() })
+        }
+        Subcommands::Qemu { sub } => handle_qemu_command(sub),
     }
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    env_logger::builder()
+        .filter_level(LevelFilter::Info)
+        .init();
     let args = Args::parse();
     handle_command(&args.sub).await?;
     Ok(())
