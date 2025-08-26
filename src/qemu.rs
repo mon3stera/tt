@@ -8,8 +8,8 @@ use log::info;
 
 static MANAGER: OnceLock<Mutex<QemuManager>> = OnceLock::new();
 
-fn manager_ref() -> &'static Mutex<QemuManager> {
-    MANAGER.get_or_init(|| Mutex::new(QemuManager::default()))
+pub fn manager_ref() -> &'static Mutex<QemuManager> {
+    MANAGER.get_or_init(|| Mutex::new(QemuManager::new()))
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -58,9 +58,17 @@ impl From<String> for QemuType {
 #[derive(Default)]
 pub struct QemuManager {
     instances: HashMap<u16, QemuGuard>,
+    next_port: u16,
 }
 
 impl QemuManager {
+    pub fn new() -> Self {
+        Self {
+            instances: HashMap::default(),
+            next_port: 56789,
+        }
+    }
+
     pub fn spawn(
         &mut self,
         port: u16,
@@ -68,7 +76,8 @@ impl QemuManager {
         shared: Option<impl AsRef<str>>,
     ) -> anyhow::Result<()> {
         let mut child = Command::new("qemu-system-aarch64");
-
+        child
+            .stdin(Stdio::null());
         child
             .args(basic_vmm_args(port));
         if matches!(typ, QemuType::Confidential) {
@@ -84,12 +93,49 @@ impl QemuManager {
             typ,
         };
         self.instances.insert(port, guard);
-        info!("{}", format!("Successfully spawned a qemu process with port {port}"));
+        match typ {
+            QemuType::Normal => {
+                info!("{}", "Sleep for one minute to wait for vmm running".bright_red());
+                std::thread::sleep(Duration::from_mins(1));
+            }
+            QemuType::Confidential => {
+                info!("{}", "Sleep for three minutes to wait for vmm running".red());
+                std::thread::sleep(Duration::from_mins(3));
+            }
+        }
+        info!("{}", format!("Successfully spawned a qemu process with port {port}").bright_red());
         Ok(())
+    }
+
+    pub fn spawn_auto_port(&mut self, typ: QemuType, shared: Option<impl AsRef<str>>) -> anyhow::Result<u16> {
+        let port = self.next_port;
+        self.next_port += 1;
+        self.spawn(port, typ, shared)?;
+        Ok(port)
     }
 
     pub fn stop(&mut self, port: u16) {
         self.instances.remove(&port);
+    }
+
+    pub fn find_vmm<F>(&self, predicate: F) -> u16
+    where
+        F: Fn((u16, &QemuGuard)) -> bool,
+    {
+        *self
+            .instances
+            .iter()
+            .find(|(port, guard)| predicate((**port, guard)))
+            .unwrap()
+            .0
+    }
+
+    pub fn find_normal_vmm(&self) -> u16 {
+        self.find_vmm(|(_, guard)| matches!(guard.typ, QemuType::Normal))
+    }
+
+    pub fn find_confidential_vmm(&self) -> u16 {
+        self.find_vmm(|(_, guard)| matches!(guard.typ, QemuType::Confidential))
     }
 }
 
@@ -103,7 +149,9 @@ impl Drop for QemuGuard {
     fn drop(&mut self) {
         if let Err(e) = self.instance.kill() {
             info!("{}", format!("Failed to stop qemu at port {}", self.port));
+            return;
         }
+        info!("{}", format!("Successfully stopped qemu process with port {}", self.port).bright_red());
     }
 }
 

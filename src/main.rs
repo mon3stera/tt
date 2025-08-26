@@ -53,6 +53,7 @@ enum Subcommands {
     Init {
 
     },
+    /// Management for qemu.
     Qemu {
         #[clap(subcommand)]
         sub: QemuSub,

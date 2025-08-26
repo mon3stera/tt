@@ -3,11 +3,8 @@ use crate::client::{exec, upload};
 use crate::module::{install_module, realm_physical_address};
 use clap::Subcommand;
 use std::os::unix::prelude::ExitStatusExt;
-use std::process::{Child, Command, Stdio};
-use crate::qemu::{shared_vmm_extra_args, start_confidential_vmm_if_no_exists, start_normal_vmm_if_no_exists};
-
-const NORMAL_VMM_PORT: u16 = 8088;
-const CONFIDENTIAL_VMM_PORT: u16 = 8089;
+use std::process::{Command, Stdio};
+use crate::qemu::{manager_ref, shared_vmm_extra_args, start_confidential_vmm_if_no_exists, QemuType};
 
 const DEFAULT_SHARED_ADDR: &str = "0000:00:03.0";
 
@@ -26,6 +23,8 @@ pub async fn handle_test_command(sub: &TestSub) -> anyhow::Result<()> {
                 601 => test_601()?,
                 82 => test_82().await?,
                 821 => test_821().await?,
+                83 => test_83().await?,
+                831 => test_831().await?,
                 _ => todo!(),
             }
         }
@@ -78,12 +77,17 @@ async fn test_60() -> anyhow::Result<()> {
     install_module("realm_pa_provider", &[])?;
     let addr = realm_physical_address()?;
 
-    start_normal_vmm_if_no_exists(&shared_vmm_extra_args(&addr), CONFIDENTIAL_VMM_PORT).await?;
-    upload("./tt", CONFIDENTIAL_VMM_PORT).await?;
-    exec("chmod +x /test/tt", CONFIDENTIAL_VMM_PORT).await?;
+    let mut manager = manager_ref().lock().unwrap();
+    let port = manager.spawn_auto_port(QemuType::Normal, Some(addr))?;
+    upload_tt(port).await?;
 
-    let res = exec("/test/tt test run 601", CONFIDENTIAL_VMM_PORT).await?;
-    println!("{res}");
+    let res = exec("/test/tt test run 601", port).await?;
+    if res.stdout.contains("Test 60 passed") {
+        println!("Test 60 passed. Process terminated by SIGBUS(7) as expected.");
+    } else {
+        println!("Test 60 failed.");
+    }
+    manager.stop(port);
     Ok(())
 }
 
@@ -135,34 +139,66 @@ fn pa_from_shared(pci: &str) -> anyhow::Result<String> {
     Ok(pa.to_string())
 }
 
-
-
-// this test will be executed in confidential vmm.
 async fn test_82() -> anyhow::Result<()> {
-    const PORT: u16 = 8089;
     // this address is usually using by kernel.
-    let target_addr = 0x1000;
+    let target_addr = "0xFE940000";
 
-    info!("Running confidential vmm...");
-    let vmm = start_confidential_vmm_if_no_exists(&shared_vmm_extra_args(&target_addr.to_string()), PORT).await?;
+    let mut manager = manager_ref().lock().unwrap();
+    let port = manager.spawn_auto_port(QemuType::Confidential, Some(target_addr))?;
+    upload_tt(port).await?;
 
-    info!("Send tt to vmm...");
-    upload("./tt", PORT).await?;
-
-    info!("Preparing to execute stage 2...");
-    exec("/test/tt test exec 821", PORT).await?;
+    let res = exec("/test/tt test run 821", port).await?;
+    if res.stdout.contains("passed") {
+        println!("Test 82 passed.");
+    } else {
+        println!("Test 82 failed");
+    }
+    manager.stop(port);
     Ok(())
 }
 
-// this is the stage 2 of test 82.
 async fn test_821() -> anyhow::Result<()> {
     let pa = pa_from_shared(DEFAULT_SHARED_ADDR)?;
-    info!("Found pa: {pa}, reading...");
-    crate::binary::read(&pa)?;
+    if read_mem_assert_signal_bus(&pa)? {
+        println!("passed");
+        return Ok(())
+    }
+    println!("failed");
     Ok(())
+}
+
+async fn test_83() -> anyhow::Result<()> {
+    todo!()
+}
+
+async fn test_831() -> anyhow::Result<()> {
+    todo!()
 }
 
 fn strip_radix16(num: &str) -> anyhow::Result<u64> {
     let striped = num.strip_prefix("0x").unwrap_or(num);
     Ok(u64::from_str_radix(striped, 16)?)
+}
+
+async fn upload_tt(port: u16) -> anyhow::Result<()> {
+    upload("./tt", port).await?;
+    exec("chmod +x /test/tt", port).await?;
+    Ok(())
+}
+
+fn read_mem_assert_signal_bus(addr: &str) -> anyhow::Result<bool> {
+    let mut tt = Command::new("/test/tt")
+        .args(["binary", "read", addr])
+        .spawn()?;
+
+    // This child may be killed by a signal, so we cannot check its exit code.
+    let status = tt.wait()?;
+    if let Some(signal) = status.signal() {
+        const SIGBUS: i32 = 7;
+        if signal == SIGBUS {
+            return Ok(true);
+        }
+        return Ok(false);
+    }
+    Ok(false)
 }

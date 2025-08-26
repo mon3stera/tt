@@ -4,7 +4,6 @@ use clap::Subcommand;
 use reqwest::Body;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
-use bytes::BytesMut;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -48,10 +47,10 @@ pub async fn upload(src: &str, port: u16) -> anyhow::Result<()> {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ExecRes {
-    success: String,
-    stdout: String,
-    stderr: String,
-    error: Option<String>,
+    pub success: String,
+    pub stdout: String,
+    pub stderr: String,
+    pub error: Option<String>,
 }
 
 impl Display for ExecRes {
